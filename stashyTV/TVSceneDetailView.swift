@@ -7,6 +7,7 @@
 
 import SwiftUI
 import AVKit
+import UIKit
 import Combine
 
 struct TVSceneDetailView: View {
@@ -124,7 +125,12 @@ struct TVSceneDetailView: View {
             loadData()
         }) {
             if let player = playerViewModel.player {
-                TVVideoPlayerView(player: player, isPresented: $playerViewModel.isShowingPlayer) {
+                TVVideoPlayerView(
+                    player: player,
+                    isPresented: $playerViewModel.isShowingPlayer,
+                    captionTracks: playerViewModel.captionTracks,
+                    selectedCaption: $playerViewModel.selectedCaption
+                ) {
                     // Failsafe — save progress falls fullScreenCover ohne `onDismiss` weggeht.
                     playerViewModel.saveProgress()
                 }
@@ -747,6 +753,10 @@ class TVPlayerViewModel: ObservableObject {
     @Published var player: AVPlayer?
     @Published var isShowingPlayer = false
     @Published var error: Error?
+    /// Available subtitle tracks for the current scene, and the selected one
+    /// (nil = subtitles off). Populated on `setupPlayer`.
+    @Published var captionTracks: [CaptionTrack] = []
+    @Published var selectedCaption: CaptionTrack?
 
     private var statusObserver: NSKeyValueObservation?
     private var progressTimer: AnyCancellable?
@@ -791,6 +801,19 @@ class TVPlayerViewModel: ObservableObject {
         self.sceneId = sceneId
         self.viewModel = viewModel
         self.didApplyInitialPlayback = false
+
+        // Fetch caption tracks for this scene; auto-select the preferred/first
+        // track when subtitles are enabled (remembered from a prior toggle).
+        self.captionTracks = []
+        self.selectedCaption = nil
+        viewModel.fetchSceneCaptions(sceneId: sceneId) { [weak self] tracks in
+            guard let self else { return }
+            self.captionTracks = tracks
+            if SubtitlePreferences.shared.isEnabled, !tracks.isEmpty {
+                let preferred = SubtitlePreferences.shared.preferredLanguageCode
+                self.selectedCaption = tracks.first(where: { $0.languageCode == preferred }) ?? tracks.first
+            }
+        }
 
         let newPlayer = createPlayer(for: url)
         self.player = newPlayer
@@ -914,6 +937,8 @@ class TVPlayerViewModel: ObservableObject {
         player = nil
         sceneId = nil
         viewModel = nil
+        captionTracks = []
+        selectedCaption = nil
         p?.pause()
         p?.replaceCurrentItem(with: nil)
     }
@@ -921,22 +946,117 @@ class TVPlayerViewModel: ObservableObject {
 
 // MARK: - Embedded Video Player for tvOS Full Screen Cover
 
-struct TVVideoPlayerView: View {
+/// Full-screen tvOS player. Wraps `AVPlayerViewController` (rather than SwiftUI's
+/// `VideoPlayer`) so a subtitle overlay can live in `contentOverlayView` and a
+/// custom "Subtitles" menu can be added to the transport bar.
+struct TVVideoPlayerView: UIViewControllerRepresentable {
     let player: AVPlayer
     @Binding var isPresented: Bool
+    let captionTracks: [CaptionTrack]
+    @Binding var selectedCaption: CaptionTrack?
     var onDisappear: (() -> Void)? = nil
 
-    var body: some View {
-        VideoPlayer(player: player) {
-            // Empty overlay - VideoPlayer provides native tvOS controls
+    func makeCoordinator() -> Coordinator {
+        Coordinator(isPresented: $isPresented, selectedCaption: $selectedCaption, onDisappear: onDisappear)
+    }
+
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let controller = AVPlayerViewController()
+        controller.player = player
+        controller.loadViewIfNeeded()
+
+        let overlay = SubtitleOverlayController(player: player)
+        if let overlayHost = controller.contentOverlayView {
+            overlay.containerView.frame = overlayHost.bounds
+            overlay.containerView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            overlayHost.addSubview(overlay.containerView)
         }
-        .ignoresSafeArea()
-        .onExitCommand {
-            // Menu button should close the player, not exit the app.
-            isPresented = false
+        context.coordinator.overlay = overlay
+        context.coordinator.controller = controller
+
+        // Menu button closes the player (matches prior behavior) rather than
+        // dismissing controls or exiting the app.
+        let menuTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleMenu))
+        menuTap.allowedPressTypes = [NSNumber(value: UIPress.PressType.menu.rawValue)]
+        controller.view.addGestureRecognizer(menuTap)
+
+        context.coordinator.rebuildSubtitleMenu(tracks: captionTracks, selected: selectedCaption)
+        context.coordinator.applySelection(selectedCaption)
+        return controller
+    }
+
+    func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
+        context.coordinator.rebuildSubtitleMenu(tracks: captionTracks, selected: selectedCaption)
+        context.coordinator.applySelection(selectedCaption)
+    }
+
+    static func dismantleUIViewController(_ uiViewController: AVPlayerViewController, coordinator: Coordinator) {
+        coordinator.onDisappear?()
+    }
+
+    final class Coordinator: NSObject {
+        weak var controller: AVPlayerViewController?
+        var overlay: SubtitleOverlayController?
+        let onDisappear: (() -> Void)?
+
+        private let isPresented: Binding<Bool>
+        private let selectedCaption: Binding<CaptionTrack?>
+        private var loadedTrackID: String?
+
+        init(isPresented: Binding<Bool>, selectedCaption: Binding<CaptionTrack?>, onDisappear: (() -> Void)?) {
+            self.isPresented = isPresented
+            self.selectedCaption = selectedCaption
+            self.onDisappear = onDisappear
         }
-        .onDisappear {
-            onDisappear?()
+
+        @objc func handleMenu() {
+            isPresented.wrappedValue = false
+        }
+
+        /// Rebuild the transport-bar "Subtitles" menu (Off + one item per track),
+        /// reflecting the current selection with a checkmark.
+        func rebuildSubtitleMenu(tracks: [CaptionTrack], selected: CaptionTrack?) {
+            guard let controller else { return }
+            guard #available(tvOS 15.0, *), !tracks.isEmpty else {
+                if #available(tvOS 15.0, *) { controller.transportBarCustomMenuItems = [] }
+                return
+            }
+            let off = UIAction(title: "Off", state: selected == nil ? .on : .off) { [weak self] _ in
+                self?.select(nil, tracks: tracks)
+            }
+            let trackActions = tracks.map { track in
+                UIAction(title: track.displayName, state: selected?.id == track.id ? .on : .off) { [weak self] _ in
+                    self?.select(track, tracks: tracks)
+                }
+            }
+            let menu = UIMenu(title: "Subtitles",
+                              image: UIImage(systemName: "captions.bubble"),
+                              children: [off] + trackActions)
+            controller.transportBarCustomMenuItems = [menu]
+        }
+
+        private func select(_ track: CaptionTrack?, tracks: [CaptionTrack]) {
+            selectedCaption.wrappedValue = track
+            SubtitlePreferences.shared.isEnabled = (track != nil)
+            if let track { SubtitlePreferences.shared.preferredLanguageCode = track.languageCode }
+            applySelection(track)
+            rebuildSubtitleMenu(tracks: tracks, selected: track)
+        }
+
+        /// Load + display the selected track's cues, or clear when nil. Skips
+        /// reloading a track that is already active.
+        func applySelection(_ track: CaptionTrack?) {
+            guard let track else {
+                overlay?.setTrack(nil)
+                loadedTrackID = nil
+                return
+            }
+            if loadedTrackID == track.id { return }
+            loadedTrackID = track.id
+            SubtitleLoader.load(track) { [weak self] parsed in
+                guard self?.loadedTrackID == track.id else { return }
+                self?.overlay?.setTrack(parsed)
+            }
         }
     }
 }
