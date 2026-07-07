@@ -83,6 +83,8 @@
 		DFVTT0006000000000000006 /* SceneCaptions.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFVTT0004000000000000004 /* SceneCaptions.swift */; };
 		DFVTT0008000000000000008 /* SubtitlePreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFVTT0007000000000000007 /* SubtitlePreferences.swift */; };
 		DFVTT0009000000000000009 /* SubtitlePreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFVTT0007000000000000007 /* SubtitlePreferences.swift */; };
+		DFVTT0011000000000000011 /* SubtitleOverlayController.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFVTT0010000000000000010 /* SubtitleOverlayController.swift */; };
+		DFVTT0012000000000000012 /* SubtitleOverlayController.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFVTT0010000000000000010 /* SubtitleOverlayController.swift */; };
 		DF22BB242F16743C007C2090 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF22BB192F16743C007C2090 /* HomeView.swift */; };
 		DF22BB272F167CDC007C2090 /* ImageCacheManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF22BB262F167CDC007C2090 /* ImageCacheManager.swift */; };
 		DF22BB322F1831C7007C2090 /* AppearanceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF22BB312F1831C7007C2090 /* AppearanceManager.swift */; };
@@ -189,6 +191,7 @@
 		DFVTT0001000000000000001 /* WebVTTSubtitles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebVTTSubtitles.swift; sourceTree = "<group>"; };
 		DFVTT0004000000000000004 /* SceneCaptions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneCaptions.swift; sourceTree = "<group>"; };
 		DFVTT0007000000000000007 /* SubtitlePreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubtitlePreferences.swift; sourceTree = "<group>"; };
+		DFVTT0010000000000000010 /* SubtitleOverlayController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubtitleOverlayController.swift; sourceTree = "<group>"; };
 		DF22BB1D2F16743C007C2090 /* TagsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagsView.swift; sourceTree = "<group>"; };
 		DF22BB262F167CDC007C2090 /* ImageCacheManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageCacheManager.swift; sourceTree = "<group>"; };
 		DF22BB312F1831C7007C2090 /* AppearanceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearanceManager.swift; sourceTree = "<group>"; };
@@ -328,6 +331,7 @@
 				DFVTT0001000000000000001 /* WebVTTSubtitles.swift */,
 				DFVTT0004000000000000004 /* SceneCaptions.swift */,
 				DFVTT0007000000000000007 /* SubtitlePreferences.swift */,
+				DFVTT0010000000000000010 /* SubtitleOverlayController.swift */,
 				DF90B75D2F1A5ECE003ED852 /* StarRatingView.swift */,
 				08FB77A2FE84155DC02AAC07 /* StashDBViewModel.swift */,
 				DFE5045D2E8A8C2000323FF4 /* StudioDetailView.swift */,
@@ -612,6 +616,7 @@
 				DFVTT0003000000000000003 /* WebVTTSubtitles.swift in Sources */,
 				DFVTT0006000000000000006 /* SceneCaptions.swift in Sources */,
 				DFVTT0009000000000000009 /* SubtitlePreferences.swift in Sources */,
+				DFVTT0012000000000000012 /* SubtitleOverlayController.swift in Sources */,
 				DF06EF262F18EC1300299105 /* SceneCardView.swift in Sources */,
 				DF22BB242F16743C007C2090 /* HomeView.swift in Sources */,
 				FC10AB0012345678901234AB /* FloatingCatalogBar.swift in Sources */,
@@ -653,6 +658,7 @@
 				DFVTT0002000000000000002 /* WebVTTSubtitles.swift in Sources */,
 				DFVTT0005000000000000005 /* SceneCaptions.swift in Sources */,
 				DFVTT0008000000000000008 /* SubtitlePreferences.swift in Sources */,
+				DFVTT0011000000000000011 /* SubtitleOverlayController.swift in Sources */,
 				8D7ECC24161D4D9EBF4C3A57 /* TagsView.swift in Sources */,
 				5DDB6F948ED24348A4916DCF /* ImageCacheManager.swift in Sources */,
 				A8FA63740E8A43609EDB1AAD /* AppearanceManager.swift in Sources */,
