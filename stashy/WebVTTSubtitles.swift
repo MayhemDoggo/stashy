@@ -4,12 +4,12 @@
 //
 //  Parsing and model for sidecar WebVTT (*.vtt) subtitle tracks.
 //
-//  Scope note: this is a deliberately reduced subset of WebVTT — enough to
-//  render Stash caption tracks with correct timing, a top/bottom placement
-//  hint (from the `line:` setting), and inline bold/italic/underline styling.
-//  Arbitrary color / background / font styling from `STYLE`/`::cue` blocks and
-//  fine-grained positioning (position/align/size, vertical text) are parsed
-//  leniently but intentionally not modeled.
+//  Scope note: a pragmatic subset of WebVTT — enough to render Stash caption
+//  tracks with correct timing, a top/bottom placement hint (from the `line:`
+//  setting), inline bold/italic/underline, and text/background color from
+//  `STYLE` (`::cue`) rules plus inline `<c.class>` tags. Fine-grained
+//  positioning (position/align/size, vertical text) and font-family/size
+//  styling are parsed leniently but intentionally not modeled.
 //
 
 import Foundation
@@ -23,14 +23,26 @@ enum SubtitlePlacement: Equatable {
     case bottom
 }
 
-/// A single styled run of text within a cue. Styling is limited to the typeface
-/// toggles WebVTT expresses with inline tags (`<b>`, `<i>`, `<u>`); color and
-/// font styling are not modeled.
+/// An RGBA color in 0...1 components, parsed from a WebVTT `STYLE` block.
+/// Kept Foundation-only (no UIColor) so the model stays platform-agnostic and
+/// testable; the renderer maps it to a `UIColor`.
+struct RGBAColor: Equatable {
+    var r: Double
+    var g: Double
+    var b: Double
+    var a: Double
+}
+
+/// A single styled run of text within a cue. Styling covers the WebVTT inline
+/// toggles (`<b>`, `<i>`, `<u>`) plus text/background color resolved from
+/// `STYLE` (`::cue`) rules and inline `<c.class>` tags.
 struct SubtitleRun: Equatable {
     var text: String
     var bold: Bool = false
     var italic: Bool = false
     var underline: Bool = false
+    var color: RGBAColor? = nil
+    var backgroundColor: RGBAColor? = nil
 }
 
 /// One caption cue: a time range plus its styled, possibly multi-line text.
@@ -66,11 +78,11 @@ struct SubtitleTrack: Equatable {
 // MARK: - Parser
 
 /// Minimal, forgiving WebVTT parser scoped to what Stashy renders: cue timings,
-/// a top/bottom placement hint from the `line:` setting, and inline
-/// `<b>`/`<i>`/`<u>` styling. `STYLE`, `REGION`, `NOTE` blocks and unknown cue
-/// tags (`<c>`, `<v>`, `<ruby>`, inline timestamps) are skipped or stripped
-/// rather than treated as errors, so a malformed or richer file still yields
-/// usable captions.
+/// a top/bottom placement hint from the `line:` setting, inline `<b>`/`<i>`/`<u>`
+/// styling, and color from `STYLE` (`::cue`) rules keyed by `<c.class>` tags.
+/// `REGION`/`NOTE` blocks and unknown cue tags (`<v>`, `<ruby>`, inline
+/// timestamps) are skipped or stripped rather than treated as errors, so a
+/// malformed or richer file still yields usable captions.
 enum WebVTTParser {
 
     static func parse(_ text: String) -> SubtitleTrack {
@@ -81,11 +93,13 @@ enum WebVTTParser {
         let lines = normalized.components(separatedBy: "\n")
 
         var cues: [SubtitleCue] = []
+        let stylesheet = WebVTTStyleSheet()
         var i = 0
         let n = lines.count
 
-        // Blocks are separated by one or more blank lines. Scan block-by-block;
-        // non-cue blocks (header / STYLE / NOTE / REGION) are ignored.
+        // Blocks are separated by one or more blank lines. Scan block-by-block:
+        // STYLE blocks feed the stylesheet; cue blocks are parsed against it;
+        // other non-cue blocks (header / NOTE / REGION) are ignored.
         while i < n {
             if lines[i].trimmingCharacters(in: .whitespaces).isEmpty {
                 i += 1
@@ -96,7 +110,9 @@ enum WebVTTParser {
                 block.append(lines[i])
                 i += 1
             }
-            if let cue = parseBlock(block) {
+            if block.first?.trimmingCharacters(in: .whitespaces).hasPrefix("STYLE") == true {
+                stylesheet.ingest(block)
+            } else if let cue = parseBlock(block, stylesheet: stylesheet) {
                 cues.append(cue)
             }
         }
@@ -106,7 +122,7 @@ enum WebVTTParser {
     }
 
     /// Parse one block into a cue, or nil if it isn't a cue.
-    private static func parseBlock(_ block: [String]) -> SubtitleCue? {
+    private static func parseBlock(_ block: [String], stylesheet: WebVTTStyleSheet) -> SubtitleCue? {
         guard !block.isEmpty else { return nil }
 
         let first = block[0].trimmingCharacters(in: .whitespaces)
@@ -123,7 +139,7 @@ enum WebVTTParser {
         }
 
         let payloadLines = Array(block[(timingIndex + 1)...])
-        let runs = parsePayload(payloadLines)
+        let runs = parsePayload(payloadLines, stylesheet: stylesheet)
         guard !runs.isEmpty else { return nil }
 
         return SubtitleCue(start: timing.start,
@@ -195,18 +211,29 @@ enum WebVTTParser {
     // MARK: Payload (inline styling)
 
     /// Convert cue payload lines into styled runs, honoring `<b>`/`<i>`/`<u>`
-    /// (including nesting) and stripping every other tag. Lines are joined with "\n".
-    private static func parsePayload(_ lines: [String]) -> [SubtitleRun] {
+    /// (including nesting), tracking `<c.class>` classes, and resolving each
+    /// run's color from the stylesheet. Unknown tags (`<v>`, `<ruby>`, inline
+    /// timestamps) are stripped. Lines are joined with "\n".
+    private static func parsePayload(_ lines: [String], stylesheet: WebVTTStyleSheet) -> [SubtitleRun] {
         let joined = lines.joined(separator: "\n")
         var runs: [SubtitleRun] = []
         var bold = 0, italic = 0, underline = 0
+        var classStack: [[String]] = []   // one entry per open <c ...> tag
         var buffer = ""
 
         func flush() {
             let decoded = decodeEntities(buffer)
             buffer = ""
             guard !decoded.isEmpty else { return }
-            runs.append(SubtitleRun(text: decoded, bold: bold > 0, italic: italic > 0, underline: underline > 0))
+            let resolved = stylesheet.style(bold: bold > 0, italic: italic > 0, classes: classStack.flatMap { $0 })
+            runs.append(SubtitleRun(
+                text: decoded,
+                bold: bold > 0,
+                italic: italic > 0,
+                underline: underline > 0,
+                color: resolved.color,
+                backgroundColor: resolved.backgroundColor
+            ))
         }
 
         var idx = joined.startIndex
@@ -218,13 +245,20 @@ enum WebVTTParser {
                     idx = joined.index(after: idx)
                     continue
                 }
-                let tag = String(joined[joined.index(after: idx)..<close]).trimmingCharacters(in: .whitespaces)
-                let (name, isClose) = tagName(tag.lowercased())
+                let raw = String(joined[joined.index(after: idx)..<close]).trimmingCharacters(in: .whitespaces)
+                let (name, classes, isClose) = parseTag(raw)
                 switch name {
                 case "b": flush(); bold += isClose ? -1 : 1
                 case "i": flush(); italic += isClose ? -1 : 1
                 case "u": flush(); underline += isClose ? -1 : 1
-                default: break  // <c>, <v>, <ruby>, inline timestamps, etc. → stripped
+                case "c":
+                    flush()
+                    if isClose {
+                        if !classStack.isEmpty { classStack.removeLast() }
+                    } else {
+                        classStack.append(classes)
+                    }
+                default: break  // <v>, <ruby>, inline timestamps, etc. → stripped
                 }
                 bold = max(0, bold); italic = max(0, italic); underline = max(0, underline)
                 idx = joined.index(after: close)
@@ -237,14 +271,18 @@ enum WebVTTParser {
         return runs
     }
 
-    /// Extract a tag's base name (before any "." class or " " annotation) and
-    /// whether it is a closing tag.
-    private static func tagName(_ tag: String) -> (name: String, isClose: Bool) {
+    /// Parse a tag body into its base name, any `.class` names, and whether it
+    /// is a closing tag. e.g. "c.speaker1.loud" → ("c", ["speaker1","loud"], false),
+    /// "v Bob" → ("v", [], false), "/c" → ("c", [], true).
+    private static func parseTag(_ tag: String) -> (name: String, classes: [String], isClose: Bool) {
         var t = tag
         let isClose = t.hasPrefix("/")
         if isClose { t.removeFirst() }
-        let base = t.prefix { $0 != "." && $0 != " " }
-        return (String(base), isClose)
+        // Drop any annotation after whitespace (e.g. <v Bob>, <lang en>).
+        let head = t.prefix { $0 != " " && $0 != "\t" }
+        let parts = head.split(separator: ".", omittingEmptySubsequences: true).map(String.init)
+        let name = parts.first?.lowercased() ?? ""
+        return (name, Array(parts.dropFirst()), isClose)
     }
 
     /// Decode the small set of WebVTT-relevant HTML entities. `&amp;` is decoded
@@ -259,4 +297,154 @@ enum WebVTTParser {
             .replacingOccurrences(of: "&nbsp;", with: "\u{00A0}")
             .replacingOccurrences(of: "&amp;", with: "&")
     }
+}
+
+// MARK: - Stylesheet (STYLE / ::cue)
+
+/// Accumulates color styling from WebVTT `STYLE` blocks and resolves the color
+/// for a run given its active inline tags and classes. Supports `::cue`,
+/// `::cue(.class)`, and `::cue(tag)` selectors with `color` / `background-color`.
+final class WebVTTStyleSheet {
+    struct RunStyle: Equatable {
+        var color: RGBAColor?
+        var backgroundColor: RGBAColor?
+        /// Overlay this style on top of `base`; own non-nil fields win.
+        func merged(over base: RunStyle) -> RunStyle {
+            RunStyle(color: color ?? base.color,
+                     backgroundColor: backgroundColor ?? base.backgroundColor)
+        }
+    }
+
+    private var defaultStyle = RunStyle()
+    private var classStyles: [String: RunStyle] = [:]
+    private var tagStyles: [String: RunStyle] = [:]
+
+    /// Feed a `STYLE` block (its raw lines, including the leading "STYLE" line).
+    func ingest(_ blockLines: [String]) {
+        parseRules(blockLines.dropFirst().joined(separator: "\n"))
+    }
+
+    /// Resolve the effective color style for a run. Precedence, least to most
+    /// specific: `::cue` default → tag rules (b/i/u) → class rules (in order).
+    func style(bold: Bool, italic: Bool, classes: [String]) -> RunStyle {
+        var result = defaultStyle
+        if bold, let t = tagStyles["b"] { result = t.merged(over: result) }
+        if italic, let t = tagStyles["i"] { result = t.merged(over: result) }
+        for cls in classes {
+            if let c = classStyles[cls] { result = c.merged(over: result) }
+        }
+        return result
+    }
+
+    // MARK: Rule parsing
+
+    private func parseRules(_ css: String) {
+        var remainder = Substring(css)
+        while let braceOpen = remainder.firstIndex(of: "{"),
+              let braceClose = remainder[braceOpen...].firstIndex(of: "}") {
+            let selector = remainder[..<braceOpen].trimmingCharacters(in: .whitespacesAndNewlines)
+            let decls = String(remainder[remainder.index(after: braceOpen)..<braceClose])
+            applyRule(selector: selector, declarations: decls)
+            remainder = remainder[remainder.index(after: braceClose)...]
+        }
+    }
+
+    private func applyRule(selector: String, declarations: String) {
+        let style = parseDeclarations(declarations)
+        guard let cueRange = selector.range(of: "::cue") else { return }
+        let arg = selector[cueRange.upperBound...].trimmingCharacters(in: .whitespaces)
+        if arg.isEmpty {
+            defaultStyle = style.merged(over: defaultStyle)
+            return
+        }
+        guard arg.hasPrefix("("), arg.hasSuffix(")") else { return }
+        let inner = arg.dropFirst().dropLast().trimmingCharacters(in: .whitespaces)
+        if inner.hasPrefix(".") {
+            let cls = String(inner.dropFirst())
+            classStyles[cls] = style.merged(over: classStyles[cls] ?? RunStyle())
+        } else if !inner.isEmpty {
+            let tag = inner.lowercased()
+            tagStyles[tag] = style.merged(over: tagStyles[tag] ?? RunStyle())
+        }
+    }
+
+    private func parseDeclarations(_ decls: String) -> RunStyle {
+        var style = RunStyle()
+        for decl in decls.split(separator: ";") {
+            let kv = decl.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            guard kv.count == 2 else { continue }
+            switch kv[0].lowercased() {
+            case "color": style.color = CSSColor.parse(kv[1])
+            case "background", "background-color": style.backgroundColor = CSSColor.parse(kv[1])
+            default: break
+            }
+        }
+        return style
+    }
+}
+
+// MARK: - CSS color parsing
+
+enum CSSColor {
+    /// Parse a CSS color value: named color, `#rgb`/`#rgba`/`#rrggbb`/`#rrggbbaa`,
+    /// or `rgb()`/`rgba()`. Returns nil if unrecognized.
+    static func parse(_ raw: String) -> RGBAColor? {
+        let s = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if s.hasPrefix("#") { return parseHex(String(s.dropFirst())) }
+        if s.hasPrefix("rgb") { return parseRGB(s) }
+        return named[s]
+    }
+
+    private static func parseHex(_ hex: String) -> RGBAColor? {
+        let chars = Array(hex)
+        func nibble(_ c: Character) -> Double? {
+            guard let v = Int(String(c), radix: 16) else { return nil }
+            return Double(v * 17) / 255.0
+        }
+        func byte(_ a: Int) -> Double? {
+            guard a + 1 < chars.count, let v = Int(String(chars[a...a+1]), radix: 16) else { return nil }
+            return Double(v) / 255.0
+        }
+        switch chars.count {
+        case 3, 4:
+            guard let r = nibble(chars[0]), let g = nibble(chars[1]), let b = nibble(chars[2]) else { return nil }
+            let a = chars.count == 4 ? (nibble(chars[3]) ?? 1) : 1
+            return RGBAColor(r: r, g: g, b: b, a: a)
+        case 6, 8:
+            guard let r = byte(0), let g = byte(2), let b = byte(4) else { return nil }
+            let a = chars.count == 8 ? (byte(6) ?? 1) : 1
+            return RGBAColor(r: r, g: g, b: b, a: a)
+        default:
+            return nil
+        }
+    }
+
+    private static func parseRGB(_ s: String) -> RGBAColor? {
+        guard let open = s.firstIndex(of: "("), let close = s.firstIndex(of: ")") else { return nil }
+        let comps = s[s.index(after: open)..<close].split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard comps.count >= 3 else { return nil }
+        func channel(_ str: String) -> Double? {
+            if str.hasSuffix("%") { return Double(str.dropLast()).map { $0 / 100.0 } }
+            return Double(str).map { $0 / 255.0 }
+        }
+        guard let r = channel(comps[0]), let g = channel(comps[1]), let b = channel(comps[2]) else { return nil }
+        let a = comps.count >= 4 ? (Double(comps[3]) ?? 1) : 1
+        return RGBAColor(r: r, g: g, b: b, a: a)
+    }
+
+    /// Common CSS named colors used by subtitle authors (subset of the full set).
+    private static let named: [String: RGBAColor] = {
+        func c(_ r: Int, _ g: Int, _ b: Int) -> RGBAColor {
+            RGBAColor(r: Double(r) / 255, g: Double(g) / 255, b: Double(b) / 255, a: 1)
+        }
+        return [
+            "white": c(255, 255, 255), "black": c(0, 0, 0), "red": c(255, 0, 0),
+            "lime": c(0, 255, 0), "green": c(0, 128, 0), "blue": c(0, 0, 255),
+            "yellow": c(255, 255, 0), "cyan": c(0, 255, 255), "aqua": c(0, 255, 255),
+            "magenta": c(255, 0, 255), "fuchsia": c(255, 0, 255), "gray": c(128, 128, 128),
+            "grey": c(128, 128, 128), "silver": c(192, 192, 192), "maroon": c(128, 0, 0),
+            "olive": c(128, 128, 0), "navy": c(0, 0, 128), "teal": c(0, 128, 128),
+            "purple": c(128, 0, 128), "orange": c(255, 165, 0), "pink": c(255, 192, 203)
+        ]
+    }()
 }

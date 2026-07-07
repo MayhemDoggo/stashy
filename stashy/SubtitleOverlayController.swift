@@ -204,14 +204,19 @@ final class SubtitleOverlayController {
 
             var attrs: [NSAttributedString.Key: Any] = [
                 .font: font,
-                .foregroundColor: UIColor.white,
+                .foregroundColor: run.color.map(Self.uiColor) ?? UIColor.white,
                 .paragraphStyle: paragraph,
                 .shadow: shadow
             ]
+            if let bg = run.backgroundColor { attrs[.backgroundColor] = Self.uiColor(bg) }
             if run.underline { attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue }
             result.append(NSAttributedString(string: run.text, attributes: attrs))
         }
         return result
+    }
+
+    private static func uiColor(_ c: RGBAColor) -> UIColor {
+        UIColor(red: CGFloat(c.r), green: CGFloat(c.g), blue: CGFloat(c.b), alpha: CGFloat(c.a))
     }
 }
 
