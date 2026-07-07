@@ -11,6 +11,7 @@ struct PlaybackSettingsSection: View {
     @ObservedObject var appearanceManager = AppearanceManager.shared
     @ObservedObject var configManager = ServerConfigManager.shared
     @ObservedObject var tabManager = TabManager.shared
+    @ObservedObject var subtitlePrefs = SubtitlePreferences.shared
 
     var body: some View {
         Section(header: Text("Playback")) {
@@ -55,6 +56,32 @@ struct PlaybackSettingsSection: View {
             #if !os(tvOS)
             Toggle(isOn: $tabManager.isPiPEnabled) {
                 Label("Picture-in-Picture", systemImage: "pip")
+            }
+            .tint(appearanceManager.tintColor)
+
+            Toggle(isOn: $subtitlePrefs.isEnabled) {
+                Label("Subtitles", systemImage: "captions.bubble")
+            }
+            .tint(appearanceManager.tintColor)
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Label("Subtitle Text Size", systemImage: "textformat.size")
+                    Spacer()
+                    Text("\(Int((subtitlePrefs.textScale * 100).rounded()))%")
+                        .foregroundColor(.secondary)
+                        .font(.caption.monospacedDigit())
+                }
+                Slider(
+                    value: $subtitlePrefs.textScale,
+                    in: SubtitlePreferences.minTextScale...SubtitlePreferences.maxTextScale,
+                    step: 0.1
+                )
+                .tint(appearanceManager.tintColor)
+            }
+
+            Toggle(isOn: $subtitlePrefs.showsBackground) {
+                Label("Subtitle Background", systemImage: "rectangle.fill")
             }
             .tint(appearanceManager.tintColor)
             #endif
