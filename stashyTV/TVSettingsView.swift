@@ -12,12 +12,23 @@ struct TVSettingsView: View {
     @ObservedObject private var configManager = ServerConfigManager.shared
     @ObservedObject private var appearanceManager = AppearanceManager.shared
     @ObservedObject private var tabManager = TabManager.shared
+    @ObservedObject private var subtitlePrefs = SubtitlePreferences.shared
     @StateObject private var filterViewModel = StashDBViewModel()
     @StateObject private var securityManager = TVSecurityManager.shared
 
     @State private var showingAddServer = false
     @State private var editingServer: ServerConfig?
     @State private var showingSetPasscode = false
+
+    /// Discrete subtitle text-size choices for tvOS (which lacks `Slider`).
+    private var subtitleSizeOptions: [(label: String, value: Double)] {
+        [("Small", 0.8), ("Default", 1.0), ("Large", 1.3), ("Extra Large", 1.6)]
+    }
+    private var subtitleSizeLabel: String {
+        subtitleSizeOptions.min(by: {
+            abs($0.value - subtitlePrefs.textScale) < abs($1.value - subtitlePrefs.textScale)
+        })?.label ?? "Default"
+    }
 
     var body: some View {
         List {
@@ -231,6 +242,42 @@ struct TVSettingsView: View {
                 Text("Playback")
             } footer: {
                 Text("\"Original\" streams MP4 files directly for best seeking performance. Lower qualities use HLS transcoding. Reels Quality is separately used for short autoplay previews if available.")
+            }
+
+            // MARK: - Subtitles
+            Section {
+                Toggle("Subtitles", isOn: $subtitlePrefs.isEnabled)
+                    .tint(appearanceManager.tintColor)
+
+                HStack {
+                    Text("Text Size")
+                    Spacer()
+                    Menu {
+                        ForEach(subtitleSizeOptions, id: \.value) { option in
+                            Button {
+                                subtitlePrefs.textScale = option.value
+                            } label: {
+                                HStack {
+                                    Text(option.label)
+                                    if abs(subtitlePrefs.textScale - option.value) < 0.01 {
+                                        Spacer()
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
+                    } label: {
+                        Text(subtitleSizeLabel)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                Toggle("Subtitle Background", isOn: $subtitlePrefs.showsBackground)
+                    .tint(appearanceManager.tintColor)
+            } header: {
+                Text("Subtitles")
+            } footer: {
+                Text("Subtitles are shown for scenes that have a caption track. Enable them here; the first available track is used.")
             }
 
             // MARK: - Default Sort

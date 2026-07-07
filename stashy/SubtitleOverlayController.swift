@@ -10,6 +10,7 @@
 //
 
 import UIKit
+import SwiftUI
 import AVFoundation
 import Combine
 
@@ -211,5 +212,50 @@ final class SubtitleOverlayController {
             result.append(NSAttributedString(string: run.text, attributes: attrs))
         }
         return result
+    }
+}
+
+// MARK: - SwiftUI bridge
+
+/// Hosts a `SubtitleOverlayController` in SwiftUI so captions can be rendered
+/// inside a `VideoPlayer`'s overlay closure (preserving native transport
+/// controls). Loads the selected track and drives the overlay.
+struct SubtitleOverlayRepresentable: UIViewRepresentable {
+    let player: AVPlayer
+    let selectedCaption: CaptionTrack?
+
+    func makeCoordinator() -> Coordinator { Coordinator(player: player) }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = context.coordinator.overlay.containerView
+        view.isUserInteractionEnabled = false
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.update(selection: selectedCaption)
+    }
+
+    final class Coordinator {
+        let overlay: SubtitleOverlayController
+        private var loadedTrackID: String?
+
+        init(player: AVPlayer) {
+            overlay = SubtitleOverlayController(player: player)
+        }
+
+        func update(selection: CaptionTrack?) {
+            guard let track = selection else {
+                overlay.setTrack(nil)
+                loadedTrackID = nil
+                return
+            }
+            if loadedTrackID == track.id { return }
+            loadedTrackID = track.id
+            SubtitleLoader.load(track) { [weak self] parsed in
+                guard self?.loadedTrackID == track.id else { return }
+                self?.overlay.setTrack(parsed)
+            }
+        }
     }
 }
