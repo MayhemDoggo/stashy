@@ -8947,6 +8947,32 @@ extension StashDBViewModel {
             }
         }
     }
+
+    /// Fetches the available subtitle/caption tracks for a scene, resolved to
+    /// fetchable URLs. Mirrors `fetchSceneStreams`: a separate, on-demand query
+    /// so the (rarely-changing) caption list isn't threaded through the Scene
+    /// model and its many re-initializers.
+    func fetchSceneCaptions(sceneId: String, completion: @escaping ([CaptionTrack]) -> Void) {
+        let query = GraphQLQueries.loadQuery(named: "sceneCaptions")
+        let variables = ["id": sceneId]
+        let body: [String: Any] = [
+            "query": query,
+            "variables": variables
+        ]
+
+        guard let bodyData = try? JSONSerialization.data(withJSONObject: body),
+              let bodyString = String(data: bodyData, encoding: .utf8) else {
+            DispatchQueue.main.async { completion([]) }
+            return
+        }
+
+        performGraphQLQuery(query: bodyString) { (response: SceneCaptionsResponse?) in
+            let scene = response?.data?.findScene
+            let tracks = CaptionTrack.tracks(base: scene?.paths?.caption, captions: scene?.captions)
+            print("💬 Fetched \(tracks.count) caption track(s) for scene \(sceneId)")
+            DispatchQueue.main.async { completion(tracks) }
+        }
+    }
 }
 
 /// Session-lifetime RAM cache for scene stream metadata. Cleared only on

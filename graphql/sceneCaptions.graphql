@@ -1,0 +1,11 @@
+query SceneCaptions($id: ID!) {
+  findScene(id: $id) {
+    paths {
+      caption
+    }
+    captions {
+      language_code
+      caption_type
+    }
+  }
+}
