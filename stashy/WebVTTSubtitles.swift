@@ -139,7 +139,10 @@ enum WebVTTParser {
         }
 
         let payloadLines = Array(block[(timingIndex + 1)...])
-        let runs = parsePayload(payloadLines, stylesheet: stylesheet)
+        var runs = parsePayload(payloadLines, stylesheet: stylesheet)
+        // Stash strips STYLE/<c> on serve, so subgen's dual-language coloring is
+        // re-applied from the "› " marker that survives in the text.
+        runs = SubgenDualLanguage.colorize(runs)
         guard !runs.isEmpty else { return nil }
 
         return SubtitleCue(start: timing.start,
@@ -447,4 +450,44 @@ enum CSSColor {
             "purple": c(128, 0, 128), "orange": c(255, 165, 0), "pink": c(255, 192, 203)
         ]
     }()
+}
+
+// MARK: - Subgen dual-language marker coloring
+
+/// Re-colors subgen dual-language cues from the "› " marker, matching
+/// `subgen.js` `colorizeCue`.
+///
+/// Subgen emits translated cues as two lines — native, then "› English" — and
+/// carries color in a `STYLE`/`<c>` block for players that read the raw file
+/// (VLC). But Stash strips `STYLE`/`<c>` when it serves a caption, so the VTT
+/// Stashy receives has only the "› " marker left in the text. This reconstructs
+/// the color the same way the Stash web player does: the native part (before the
+/// marker) warm, the English part (from the marker on) cool + italic.
+///
+/// Colors must stay in sync with subgen.js `NATIVE`/`ENGLISH`.
+enum SubgenDualLanguage {
+    static let marker = "\u{203A} "                      // "› "
+    static let nativeColor = CSSColor.parse("#ffe08a")!  // warm
+    static let englishColor = CSSColor.parse("#7fd1ff")! // cool
+
+    /// Re-color a cue's runs by the marker. A no-op when the marker is absent
+    /// (monolingual cue) or the runs already carry explicit color (a raw file
+    /// whose `STYLE`/`<c>` survived — that styling wins).
+    static func colorize(_ runs: [SubtitleRun]) -> [SubtitleRun] {
+        if runs.contains(where: { $0.color != nil }) { return runs }
+        let text = runs.map(\.text).joined()
+        guard let range = text.range(of: marker) else { return runs }
+
+        let native = String(text[..<range.lowerBound])
+            .replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression)
+        let english = String(text[range.lowerBound...])  // includes the marker
+
+        var result: [SubtitleRun] = []
+        if !native.isEmpty {
+            result.append(SubtitleRun(text: native, color: nativeColor))
+            result.append(SubtitleRun(text: "\n"))
+        }
+        result.append(SubtitleRun(text: english, italic: true, color: englishColor))
+        return result
+    }
 }
